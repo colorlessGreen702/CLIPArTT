@@ -5,7 +5,7 @@ def argparser():
 
     #Directories
     parser.add_argument('--root', type=str, default='/home/davidoso/scratch/Projects/MaskUpProj/', help='Base path')
-    parser.add_argument('--dataroot', type=str, default='/home/davidoso/Documents/Data/')
+    parser.add_argument('--dataroot', type=str, default='./dataset/')
     parser.add_argument('--save', type=str, default='work/', help='Path fo r base training weights')
     parser.add_argument('--save-iter', type=str, default='work/', help='Path for base training weights')
 
