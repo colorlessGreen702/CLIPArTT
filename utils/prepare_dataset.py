@@ -4,6 +4,10 @@ from torch.utils.data import random_split
 import torchvision
 import torchvision.transforms as transforms
 from torchvision.datasets import ImageFolder
+
+from utils import build_dataset
+from utils.data_utils import build_data_loader
+
 import numpy as np
 from PIL import Image
 
@@ -57,51 +61,35 @@ common_corruptions = ['gaussian_noise', 'shot_noise', 'impulse_noise', 'defocus_
                       'brightness', 'contrast', 'elastic_transform', 'pixelate', 'jpeg_compression']
 
 
-def prepare_test_data(args, transform=None):
-    if args.clip :
-        te_transforms = clip_transforms
-    if args.dataset == 'cifar10':
+def prepare_test_data(args, dataset, corruption=None):
+    te_transforms = clip_transforms
+    if dataset == 'cifar10':
         tesize = 10000
-        if not hasattr(args, 'corruption') or args.corruption == 'original':
+        if corruption == 'original':
             teset = torchvision.datasets.CIFAR10(root=args.dataroot,
                 train=False, download=False, transform=te_transforms)
-        elif args.corruption in common_corruptions:
-            teset_raw = np.load(args.dataroot + '/CIFAR-10-C/%s.npy' % (args.corruption))
+        elif corruption in common_corruptions:
+            teset_raw = np.load(args.dataroot + '/CIFAR-10-C/%s.npy' % (corruption))
             teset_raw = teset_raw[(args.level - 1) * tesize: args.level * tesize]
             teset = torchvision.datasets.CIFAR10(root=args.dataroot,
                 train=False, download=False, transform=te_transforms)
             teset.data = teset_raw
 
-        elif args.corruption == 'cifar_new':
-            from utils.cifar_new import CIFAR_New
-            teset = CIFAR_New(root=args.dataroot + '/CIFAR-10.1/', transform=te_transforms)
-            permute = False
-        else:
-            raise Exception('Corruption not found!')
-
-    elif args.dataset == 'cifar100':
+    elif dataset == 'cifar100':
         tesize = 10000
-        if not hasattr(args, 'corruption') or args.corruption == 'original':
+        if corruption == 'original':
             teset = torchvision.datasets.CIFAR100(root=args.dataroot,
                 train=False, download=False, transform=te_transforms)
-        elif args.corruption in common_corruptions:
-            teset_raw = np.load(args.dataroot + '/CIFAR-100-C/%s.npy' % (args.corruption))
+        elif corruption in common_corruptions:
+            teset_raw = np.load(args.dataroot + '/CIFAR-100-C/%s.npy' % (corruption))
             teset_raw = teset_raw[(args.level - 1) * tesize: args.level * tesize]
             teset = torchvision.datasets.CIFAR100(root=args.dataroot,
                 train=False, download=False, transform=te_transforms)
-
-            teset.data = teset_raw
-    elif args.dataset == 'visda':
-        teset = VisdaTest(args.dataroot, transforms=visda_val)
-
-    elif args.dataset == 'tiny-imagenet':
-        if not hasattr(args, 'corruption') or args.corruption == 'original':
-            teset = TinyImageNetDataset(args.dataroot + '/tiny-imagenet-200/', mode='val', transform=te_transforms)
-        elif args.corruption in common_corruptions:
-            teset = TinyImageNetCDataset(args.dataroot + '/Tiny-ImageNet-C/', corruption = args.corruption, level = args.level,
-                                        transform=te_transforms)
-    elif args.dataset == 'imagenet':
-      teset = ImageFolder(os.path.join(args.dataroot, args.corruption, str(args.level)), transform=te_transforms)
+            
+    elif dataset in ['caltech101','dtd','oxford_pets','ucf101','imagenet-a', 'imagenet-v']:
+            teset = build_dataset(dataset, args.dataroot)
+            teloader = build_data_loader(data_source=teset.test, batch_size=args.batch_size, is_train=False, tfm=te_transforms, shuffle=True)
+            return teloader, None, teset
     else:
         raise Exception('Dataset not found!')
 
