@@ -321,6 +321,40 @@ class DatasetWrapper(TorchDataset):
 
         return img
 
+def build_eata_loader(
+    data_source=None,
+    batch_size=64,
+    input_size=224,
+    tfm=None,
+    is_train=True,
+    shuffle=False,
+    dataset_wrapper=None,
+    subset_size=500
+):
+
+    if dataset_wrapper is None:
+        dataset_wrapper = DatasetWrapper
+
+    dataset = dataset_wrapper(data_source, input_size=input_size, transform=tfm, is_train=is_train)
+
+    indices = np.random.permutation(len(dataset))[:subset_size]
+
+    # Use SubsetRandomSampler to create a sampler for the subset
+    sampler = torch.utils.data.SubsetRandomSampler(indices)
+
+    # Build data loader
+    data_loader = torch.utils.data.DataLoader(
+        dataset_wrapper(data_source, input_size=input_size, transform=tfm, is_train=is_train),
+        batch_size=batch_size,
+        num_workers=8,
+        sampler=sampler,
+        drop_last=False,
+        pin_memory=(torch.cuda.is_available())
+    )
+    assert len(data_loader) > 0
+
+    return data_loader
+
 
 def build_data_loader(
     data_source=None,

@@ -6,7 +6,7 @@ import torchvision.transforms as transforms
 from torchvision.datasets import ImageFolder
 
 from utils import build_dataset
-from utils.data_utils import build_data_loader
+from utils.data_utils import build_data_loader, build_eata_loader
 
 import numpy as np
 from PIL import Image
@@ -67,24 +67,24 @@ def prepare_test_data(args, dataset, corruption=None):
         tesize = 10000
         if corruption == 'original':
             teset = torchvision.datasets.CIFAR10(root=args.dataroot,
-                train=False, download=False, transform=te_transforms)
+                train=False, download=True, transform=te_transforms)
         elif corruption in common_corruptions:
             teset_raw = np.load(args.dataroot + '/CIFAR-10-C/%s.npy' % (corruption))
             teset_raw = teset_raw[(args.level - 1) * tesize: args.level * tesize]
             teset = torchvision.datasets.CIFAR10(root=args.dataroot,
-                train=False, download=False, transform=te_transforms)
+                train=False, download=True, transform=te_transforms)
             teset.data = teset_raw
 
     elif dataset == 'cifar100':
         tesize = 10000
         if corruption == 'original':
             teset = torchvision.datasets.CIFAR100(root=args.dataroot,
-                train=False, download=False, transform=te_transforms)
+                train=False, download=True, transform=te_transforms)
         elif corruption in common_corruptions:
             teset_raw = np.load(args.dataroot + '/CIFAR-100-C/%s.npy' % (corruption))
             teset_raw = teset_raw[(args.level - 1) * tesize: args.level * tesize]
             teset = torchvision.datasets.CIFAR100(root=args.dataroot,
-                train=False, download=False, transform=te_transforms)
+                train=False, download=True, transform=te_transforms)
             
     elif dataset in ['caltech101','dtd','oxford_pets','ucf101','imagenet-a', 'imagenet-v']:
             teset = build_dataset(dataset, args.dataroot)
@@ -106,6 +106,62 @@ def prepare_test_data(args, dataset, corruption=None):
     else:
         teloader = torch.utils.data.DataLoader(teset, batch_size=args.batch_size,
                                                shuffle=True, num_workers=args.workers)
+
+    return teloader, te_sampler, teset
+
+
+def prepare_eata_data(args, dataset, corruption=None):
+    te_transforms = clip_transforms
+    if dataset == 'cifar10':
+        tesize = 10000
+        if corruption == 'original':
+            teset = torchvision.datasets.CIFAR10(root=args.dataroot,
+                train=False, download=True, transform=te_transforms)
+        elif corruption in common_corruptions:
+            teset_raw = np.load(args.dataroot + '/CIFAR-10-C/%s.npy' % (corruption))
+            teset_raw = teset_raw[(args.level - 1) * tesize: args.level * tesize]
+            teset = torchvision.datasets.CIFAR10(root=args.dataroot,
+                train=False, download=True, transform=te_transforms)
+            teset.data = teset_raw
+
+    elif dataset == 'cifar100':
+        tesize = 10000
+        if corruption == 'original':
+            teset = torchvision.datasets.CIFAR100(root=args.dataroot,
+                train=False, download=True, transform=te_transforms)
+        elif corruption in common_corruptions:
+            teset_raw = np.load(args.dataroot + '/CIFAR-100-C/%s.npy' % (corruption))
+            teset_raw = teset_raw[(args.level - 1) * tesize: args.level * tesize]
+            teset = torchvision.datasets.CIFAR100(root=args.dataroot,
+                train=False, download=True, transform=te_transforms)
+            
+    elif dataset in ['caltech101','dtd','oxford_pets','ucf101','imagenet-a', 'imagenet-v']:
+            teset = build_dataset(dataset, args.dataroot)
+            teloader = build_eata_loader(data_source=teset.test, batch_size=args.batch_size, is_train=False, tfm=te_transforms, shuffle=True)
+            return teloader, None, teset
+    else:
+        raise Exception('Dataset not found!')
+
+    if args.distributed:
+        te_sampler = torch.utils.data.distributed.DistributedSampler(teset)
+    else:
+        te_sampler = None
+
+    if not hasattr(args, 'workers'):
+        args.workers = 1
+    if args.distributed:
+        teloader = torch.utils.data.DataLoader(teset, batch_size=args.batch_size,
+            shuffle=(te_sampler is None), num_workers=args.workers, pin_memory=True, sampler=te_sampler)
+    else:
+        subset_size = 500
+        indices = np.random.permutation(len(teset))[:subset_size]
+        sampler = torch.utils.data.SubsetRandomSampler(indices)
+
+        # Create DataLoader with the subset sampler
+        teloader = torch.utils.data.DataLoader(teset, 
+                                            batch_size=args.batch_size,
+                                            sampler=sampler,  # Use sampler for random subset
+                                            num_workers=args.workers)
 
     return teloader, te_sampler, teset
 

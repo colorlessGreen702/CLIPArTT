@@ -33,7 +33,7 @@ def argparser():
     parser.add_argument('--evaluate', action='store_true', help='Evaluating on evaluation set')
     parser.add_argument('--resume', default='', type=str, help='Path to latest checkpoint')
     parser.add_argument('--K', type=int, default=3, help='Number of labels keep')
-    parser.add_argument('--method', type=str, default='clipartt', choices=('clipartt', 'tent', 'lame'))
+    parser.add_argument('--method', type=str, default='clipartt', choices=('clipartt', 'tent', 'lame', 'eata', 'sar'))
     parser.add_argument('--target-method', type=int, default=1, choices=(1,2,3, 4))
 
     #Test-Time Adaptation
