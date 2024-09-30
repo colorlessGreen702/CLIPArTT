@@ -101,7 +101,7 @@ def forward_and_adapt_sar(x, text_x, model, optimizer, margin, reset_constant, e
     reset_flag = False
     if ema is not None:
         if ema < 0.2:
-            print("ema < 0.2, now reset the model")
+            # print("ema < 0.2, now reset the model")
             reset_flag = True
 
     return outputs, ema, reset_flag
