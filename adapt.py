@@ -39,8 +39,13 @@ def setup_tent(model, name_model, niter = 10, method = 'clip'):
                            episodic=False)
     return tent_model
 
-def setup_eata(model, params, fishers):
-    optimizer = torch.optim.SGD(params, 0.001/64, momentum=0.9)
+def setup_eata(args, device, fisher_loader, fisher_dataset):
+    model, _ = clip.load(args.model, device)
+    model.visual = eata.configure_model(model.visual, args.model)
+    params, _ = eata.collect_params(model.visual, args.model)
+    # fishers = calc_fisher(model, device, params, fisher_loader, fisher_dataset)
+    fishers = None
+    optimizer = torch.optim.SGD(params, 0.001, momentum=0.9)
     eata_model = eata.EATA(model, optimizer,
                            fishers=fishers,
                            episodic=False)
@@ -79,21 +84,28 @@ class ContrastiveLoss(nn.Module):
         self.temperature = temperature
 
     def forward(self, image_features, text_features, labels):
-        # Calculate cosine similarity
+        # Normalize features to compute cosine similarity
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        
+        # Calculate cosine similarity and apply temperature scaling
         similarities = torch.matmul(image_features, text_features.T) / self.temperature
-        # Use log-softmax for numerical stability
+
+        # Cross entropy loss for contrastive learning
         loss = nn.functional.cross_entropy(similarities, labels)
         return loss
+
 
 def calc_fisher(net, device, params, fisher_loader, fisher_dataset):
     ewc_optimizer = torch.optim.SGD(params, 0.001)
     fishers = {}
     train_loss_fn = ContrastiveLoss().to(device)
 
+    text_inputs = torch.cat([clip.tokenize(f"a photo of a {c}") for c in fisher_dataset.classes]).to(device)
+
     for iter_, (inputs, labels) in enumerate(tqdm(fisher_loader, desc="calculating fishers:")):
         
         inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
-        text_inputs = torch.cat([clip.tokenize(f"a photo of a {c}") for c in fisher_dataset.classes]).to(device)
 
         _, image_features, text_features = net(inputs, text_inputs)
 
@@ -248,14 +260,9 @@ def run_method(method, lock, pos, args, datasets, common_corruptions):
     for dataset in datasets:
         if dataset in ['cifar10', 'cifar100']:
             if method == 'eata':
-                base_model, _ = clip.load(args.model, device)
-                base_model.visual = eata.configure_model(base_model.visual, args.model)
-                params, _ = eata.collect_params(base_model.visual, args.model)
                 fisher_loader, _, fisher_dataset = prepare_dataset.prepare_test_data(args, dataset, 'original')
-                fishers = calc_fisher(base_model, device, params, fisher_loader, fisher_dataset)
-                model = setup_eata(base_model, params, fishers)
-                del fisher_dataset, fisher_loader, _
-
+                model = setup_eata(args, device, fisher_loader, fisher_dataset)
+                del fisher_loader, _, fisher_dataset
 
             for corruption in common_corruptions:
                 if check_entry_exists('data.json', lock, method, dataset+' '+corruption):
@@ -266,24 +273,14 @@ def run_method(method, lock, pos, args, datasets, common_corruptions):
                 torch.cuda.empty_cache()
                 gc.collect()
                 torch.cuda.synchronize()
-
-            if method == 'eata':
-                del model, base_model
-                torch.cuda.empty_cache()
-                gc.collect()
-                torch.cuda.synchronize()
         else:
             if check_entry_exists('data.json', lock, method, dataset):
                     continue
 
             if method == 'eata':
-                base_model, _ = clip.load(args.model, device)
-                base_model.visual = eata.configure_model(base_model.visual, args.model)
-                params, _ = eata.collect_params(base_model.visual, args.model)
                 fisher_loader, _, fisher_dataset = prepare_dataset.prepare_test_data(args, dataset)
-                fishers = calc_fisher(base_model, device, params, fisher_loader, fisher_dataset)
-                model = setup_eata(base_model, params, fishers)
-                del fisher_loader, fisher_dataset, _
+                model = setup_eata(args, device, fisher_loader, fisher_dataset)
+                del fisher_loader, _ , fisher_dataset
                 
             teloader, _, teset = prepare_dataset.prepare_test_data(args, dataset)
             run_dataset(args, lock, method, model, device, dataset, pos, teloader, teset)
@@ -292,16 +289,10 @@ def run_method(method, lock, pos, args, datasets, common_corruptions):
             gc.collect()
             torch.cuda.synchronize()
 
-            if method == 'eata':
-                del model
-                torch.cuda.empty_cache()
-                gc.collect()
-                torch.cuda.synchronize()
-
 def main():
     args = configuration.argparser()
     
-    datasets = ['cifar100','caltech101', 'dtd', 'oxford_pets', 'ucf101', 'imagenet-a', 'imagenet-v']
+    datasets = ['cifar100']
 
     common_corruptions = ['original','gaussian_noise', 'shot_noise', 'impulse_noise', 'defocus_blur', 'glass_blur',
                           'motion_blur', 'zoom_blur', 'snow', 'frost', 'fog',
