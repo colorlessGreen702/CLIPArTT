@@ -39,13 +39,13 @@ def setup_tent(model, name_model, niter = 10, method = 'clip'):
                            episodic=False)
     return tent_model
 
-def setup_eata(args, device, fisher_loader, fisher_dataset):
+def setup_eata(args, device):
     model, _ = clip.load(args.model, device)
     model.visual = eata.configure_model(model.visual, args.model)
     params, _ = eata.collect_params(model.visual, args.model)
     # fishers = calc_fisher(model, device, params, fisher_loader, fisher_dataset)
     fishers = None
-    optimizer = torch.optim.SGD(params, 0.001, momentum=0.9)
+    optimizer = torch.optim.SGD(params, 0.001/64, momentum=0.9)
     eata_model = eata.EATA(model, optimizer,
                            fishers=fishers,
                            episodic=False)
@@ -260,8 +260,8 @@ def run_method(method, lock, pos, args, datasets, common_corruptions):
     for dataset in datasets:
         if dataset in ['cifar10', 'cifar100']:
             if method == 'eata':
-                fisher_loader, _, fisher_dataset = prepare_dataset.prepare_test_data(args, dataset, 'original')
-                model = setup_eata(args, device, fisher_loader, fisher_dataset)
+                # fisher_loader, _, fisher_dataset = prepare_dataset.prepare_test_data(args, dataset, 'original')
+                model = setup_eata(args, device)
                 del fisher_loader, _, fisher_dataset
 
             for corruption in common_corruptions:
@@ -278,8 +278,8 @@ def run_method(method, lock, pos, args, datasets, common_corruptions):
                     continue
 
             if method == 'eata':
-                fisher_loader, _, fisher_dataset = prepare_dataset.prepare_test_data(args, dataset)
-                model = setup_eata(args, device, fisher_loader, fisher_dataset)
+                # fisher_loader, _, fisher_dataset = prepare_dataset.prepare_test_data(args, dataset)
+                model = setup_eata(args, device)
                 del fisher_loader, _ , fisher_dataset
                 
             teloader, _, teset = prepare_dataset.prepare_test_data(args, dataset)
