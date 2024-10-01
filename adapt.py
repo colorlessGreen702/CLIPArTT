@@ -262,7 +262,6 @@ def run_method(method, lock, pos, args, datasets, common_corruptions):
             if method == 'eata':
                 # fisher_loader, _, fisher_dataset = prepare_dataset.prepare_test_data(args, dataset, 'original')
                 model = setup_eata(args, device)
-                del fisher_loader, _, fisher_dataset
 
             for corruption in common_corruptions:
                 if check_entry_exists('data.json', lock, method, dataset+' '+corruption):
@@ -280,7 +279,6 @@ def run_method(method, lock, pos, args, datasets, common_corruptions):
             if method == 'eata':
                 # fisher_loader, _, fisher_dataset = prepare_dataset.prepare_test_data(args, dataset)
                 model = setup_eata(args, device)
-                del fisher_loader, _ , fisher_dataset
                 
             teloader, _, teset = prepare_dataset.prepare_test_data(args, dataset)
             run_dataset(args, lock, method, model, device, dataset, pos, teloader, teset)
@@ -292,7 +290,7 @@ def run_method(method, lock, pos, args, datasets, common_corruptions):
 def main():
     args = configuration.argparser()
     
-    datasets = ['cifar100']
+    datasets = ['cifar10','cifar100','caltech101', 'dtd', 'oxford_pets', 'ucf101', 'imagenet-a', 'imagenet-v']
 
     common_corruptions = ['original','gaussian_noise', 'shot_noise', 'impulse_noise', 'defocus_blur', 'glass_blur',
                           'motion_blur', 'zoom_blur', 'snow', 'frost', 'fog',
