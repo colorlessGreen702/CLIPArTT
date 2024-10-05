@@ -16,6 +16,8 @@ from models.sam import SAM
 import configuration
 from models import tent, lame, eata, sar
 from utils import prepare_dataset
+import time
+import math
 
 
 def setup_tent(model, name_model, niter = 10, method = 'clip'):
@@ -39,7 +41,7 @@ def setup_tent(model, name_model, niter = 10, method = 'clip'):
                            episodic=False)
     return tent_model
 
-def setup_eata(args, device):
+def setup_eata(args, device, e_margin, d_margin):
     model, _ = clip.load(args.model, device)
     model.visual = eata.configure_model(model.visual, args.model)
     params, _ = eata.collect_params(model.visual, args.model)
@@ -48,14 +50,17 @@ def setup_eata(args, device):
     optimizer = torch.optim.SGD(params, 0.001/64, momentum=0.9)
     eata_model = eata.EATA(model, optimizer,
                            fishers=fishers,
+                           e_margin=e_margin,
+                           d_margin=d_margin,
                            episodic=False)
     return eata_model
 
-def setup_sar(model, name_model):
-    model.visual = sar.configure_model(model.visual, name_model)
+def setup_sar(args, device, e_margin):
+    model, _ = clip.load(args.model, device)
+    model.visual = sar.configure_model(model.visual, args.model)
     params, param_names = sar.collect_params(model.visual)
     optimizer = setup_sam(params)
-    sar_model = sar.SAR(model, optimizer, episodic=False)
+    sar_model = sar.SAR(model, optimizer, margin_e0=e_margin, episodic=False)
     return sar_model
 
 def setup_sam(params):
@@ -178,14 +183,59 @@ def check_entry_exists(file_name, lock, method, benchmark):
 
 
 
+def profile_dataset(args, lock, method, model, device, dataset, pos, teloader, teset):
+    measured_samples = 0
+    latency = 0
+    memory_usage = 0
+    try:
+        model.reset()
+    except:
+        print("not resetting model!")
+        
+    text_inputs = torch.cat([clip.tokenize(f"a photo of a {c}") for c in teset.classes]).to(device)
+    with torch.no_grad():
+        text_features = model.model.encode_text(text_inputs)
+    text_features /= text_features.norm(dim=-1, keepdim=True)
 
+    torch.cuda.synchronize()
+    for batch_idx, (inputs, labels) in enumerate(tqdm(teloader, desc=f"{method} {dataset}", position=pos)):
+        
+        inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
 
+        if batch_idx >= 20:
+            start_time = time.time()
+            torch.cuda.reset_peak_memory_stats(device)
 
+        if args.adapt:
+            if method in ['clipartt', 'tent']:
+                Y = model(inputs, text_inputs, teset, device, K = args.K, target_method = args.target_method)  # infer and adapt
+            elif method in ['sar', 'eata']:
+                Y = model(inputs, text_inputs)
 
+        if method in ['clipartt', 'tent', 'sar', 'eata'] or not args.adapt:
+            # Calculate features
+            with torch.no_grad():
+                _ = model.model.encode_image(inputs)
 
+        if batch_idx >= 20:
+            latency += time.time() - start_time
+            memory_usage += torch.cuda.max_memory_allocated(device)
+            measured_samples += 1
+            if measured_samples == 10:
+                break
 
+    
+    avg_memory = memory_usage / measured_samples
+    avg_latency = latency / measured_samples
 
+    data = {
+        "method": method,
+        "benchmark": dataset,
+        "memory": round(avg_memory / (1024 ** 2), 4),  # Convert memory to MB
+        "latency": round(avg_latency, 4),  # Latency per sample in seconds
+    }
 
+    write_to_json('data.json', data, lock)
 
 def run_dataset(args, lock, method, model, device, dataset, pos, teloader, teset):
     correct = 0
@@ -233,8 +283,7 @@ def run_dataset(args, lock, method, model, device, dataset, pos, teloader, teset
     }
 
     write_to_json('data.json', data, lock)
-
-    # return (round(correct / len(teloader.dataset), 4))    
+ 
 
 
 
@@ -246,11 +295,10 @@ def run_method(method, lock, pos, args, datasets, common_corruptions):
     torch.manual_seed(1)
     
     # Load the model
-    if method != 'eata':
+    if method not in ['eata','sar']:
         base_model, _ = clip.load(args.model, device)
-    if method == 'sar':
-        model = setup_sar(base_model, args.model)
-    elif method == 'tent': 
+
+    if method == 'tent': 
         model = setup_tent(base_model, args.model, niter=1, method=method)
     elif method == 'clipartt': 
         model = setup_tent(base_model, args.model, niter=args.niter, method=method)
@@ -261,13 +309,22 @@ def run_method(method, lock, pos, args, datasets, common_corruptions):
         if dataset in ['cifar10', 'cifar100']:
             if method == 'eata':
                 # fisher_loader, _, fisher_dataset = prepare_dataset.prepare_test_data(args, dataset, 'original')
-                model = setup_eata(args, device)
+                if dataset == 'cifar10':
+                    model = setup_eata(args, device, e_margin=0.4*math.log(10),d_margin=0.4)
+                else:
+                    model = setup_eata(args, device, e_margin=0.4*math.log(100),d_margin=0.05)
+            if method == 'sar':
+                if dataset == 'cifar10':
+                    model = setup_sar(args, device, e_margin=0.4*math.log(10))
+                else:
+                    model = setup_sar(args, device, e_margin=0.4*math.log(100))
 
             for corruption in common_corruptions:
                 if check_entry_exists('data.json', lock, method, dataset+' '+corruption):
                     continue
                 teloader, _, teset = prepare_dataset.prepare_test_data(args, dataset, corruption)
                 run_dataset(args, lock, method, model, device, dataset+' '+corruption, pos, teloader, teset)
+                # profile_dataset(args, lock, method, model, device, dataset+' '+corruption, pos, teloader, teset)
                 del teloader, teset, _
                 torch.cuda.empty_cache()
                 gc.collect()
@@ -278,10 +335,14 @@ def run_method(method, lock, pos, args, datasets, common_corruptions):
 
             if method == 'eata':
                 # fisher_loader, _, fisher_dataset = prepare_dataset.prepare_test_data(args, dataset)
-                model = setup_eata(args, device)
+                model = setup_eata(args, device, e_margin=0.4*math.log(500),d_margin=0.05)
+            if method == 'sar':
+                # fisher_loader, _, fisher_dataset = prepare_dataset.prepare_test_data(args, dataset)
+                model = setup_sar(args, device, e_margin=0.4*math.log(500))
                 
             teloader, _, teset = prepare_dataset.prepare_test_data(args, dataset)
             run_dataset(args, lock, method, model, device, dataset, pos, teloader, teset)
+            # profile_dataset(args, lock, method, model, device, dataset, pos, teloader, teset)
             del teloader, teset, _
             torch.cuda.empty_cache()
             gc.collect()
@@ -290,21 +351,20 @@ def run_method(method, lock, pos, args, datasets, common_corruptions):
 def main():
     args = configuration.argparser()
     
-    datasets = ['cifar10','cifar100','caltech101', 'dtd', 'oxford_pets', 'ucf101', 'imagenet-a', 'imagenet-v']
+    datasets = ['cifar10','cifar100', 'caltech101', 'dtd', 'oxford_pets', 'ucf101', 'imagenet-a']
+    # datasets = ['cifar10','cifar100', 'caltech101']
 
     common_corruptions = ['original','gaussian_noise', 'shot_noise', 'impulse_noise', 'defocus_blur', 'glass_blur',
                           'motion_blur', 'zoom_blur', 'snow', 'frost', 'fog',
                           'brightness', 'contrast', 'elastic_transform', 'pixelate', 'jpeg_compression']
     # common_corruptions = ['gaussian_noise']
-
-    # methods = ['sar']
-
-    # pool = mp.Pool(len(methods))
+    
     lock = mp.Manager().Lock()
-    # pool.starmap(run_method, [(method, lock, idx, args, datasets, common_corruptions) for idx, method in enumerate(methods)])
-    # pool.close()
-    # pool.join()
-    run_method('eata', lock, 0, args, datasets, common_corruptions)
+
+    # run_method('clip', lock, 0, args, datasets, common_corruptions)
+    run_method('sar', lock, 0, args, datasets, common_corruptions)
+    # run_method('tent', lock, 0, args, datasets, common_corruptions)
+    # run_method('eata', lock, 0, args, datasets, common_corruptions)
 
 
 if __name__ == "__main__":
